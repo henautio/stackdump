@@ -1252,7 +1252,7 @@ where
             }))
         }
         (Ok(variable_name), Err(type_error)) => {
-            log::info!(
+            log::debug!(
                 "Could not read the type of variable `{}` of entry {:X?}: {}",
                 variable_name,
                 entry.offset().to_debug_info_offset(&unit.header),

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-package.version = "0.10.3"
+package.version = "0.10.4"
 
 members = [
     "capture",

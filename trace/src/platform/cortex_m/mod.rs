@@ -28,22 +28,23 @@ impl<'data> CortexMPlatform<'data> {
         device_memory: &mut DeviceMemory<<Self as Platform<'data>>::Word>,
         unwind_info: UnwindTableRow<usize>,
     ) -> Result<bool, TraceError> {
-        let updated = match unwind_info.cfa() {
+        let cfa = match unwind_info.cfa() {
             CfaRule::RegisterAndOffset { register, offset } => {
-                let new_cfa = (device_memory.register(*register)? as i64 + *offset) as u32;
-                let old_cfa = device_memory.register(gimli::Arm::SP)?;
-                let changed = new_cfa != old_cfa;
-                *device_memory.register_mut(gimli::Arm::SP)? = new_cfa;
-                changed
+                (device_memory.register(*register)? as i64 + *offset) as u32
             }
             CfaRule::Expression(_) => todo!("CfaRule::Expression"),
         };
 
+        let mut sp_updated = false;
+
         for (reg, rule) in unwind_info.registers() {
+            if *reg == gimli::Arm::SP {
+                sp_updated = true;
+            }
+
             match rule {
                 RegisterRule::Undefined => unreachable!(),
                 RegisterRule::Offset(offset) => {
-                    let cfa = device_memory.register(gimli::Arm::SP)?;
                     let addr = (i64::from(cfa) + offset) as u64;
                     let new_value = device_memory
                         .read_u32(addr, RunTimeEndian::Little)?
@@ -54,7 +55,12 @@ impl<'data> CortexMPlatform<'data> {
             }
         }
 
-        Ok(updated)
+        if !sp_updated && device_memory.register(gimli::Arm::SP)? != cfa {
+            sp_updated = true;
+            *device_memory.register_mut(gimli::Arm::SP)? = cfa;
+        }
+
+        Ok(sp_updated)
     }
 
     fn is_last_frame(
@@ -264,9 +270,10 @@ impl<'data> Platform<'data> for CortexMPlatform<'data> {
                         line: None,
                         column: None,
                     },
-                    frame_type: FrameType::Corrupted(
-                        "CFA did not change and LR and PC are equal".into(),
-                    ),
+                    frame_type: FrameType::Corrupted(format!(
+                        "CFA did not change and LR and PC are equal: {:#010X}",
+                        device_memory.register(gimli::Arm::PC)?
+                    )),
                     variables: Vec::new(),
                 }),
             });
@@ -305,8 +312,13 @@ impl<'data> Platform<'data> for CortexMPlatform<'data> {
                 Err(e) => return Err(e),
             }
         } else {
-            // No exception, so follow the LR back
-            *device_memory.register_mut(gimli::Arm::PC)? = device_memory.register(gimli::Arm::LR)?
+            // No exception, so follow the LR back, but one instruction back.
+            // Sometimes a function will have a `bl` instruction at the end.
+            // An example is noreturn functions.
+            // LR always points to the next instruction, which means that it doesn't have to be in the same function as from where the branch originated.
+            // https://lkml.kernel.org/lkml/20240305175846.qnyiru7uaa7itqba@treble/
+            *device_memory.register_mut(gimli::Arm::PC)? =
+                device_memory.register(gimli::Arm::LR)? - 2;
         }
 
         // Have we reached the reset vector?
