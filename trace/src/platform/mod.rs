@@ -130,6 +130,13 @@ where
             Err(e) => return Err(e),
         }
 
+        log::info!(
+            "Current registers:\nSP: {:#010X}\nLR: {:#010X}\nPC: {:#010X}",
+            device_memory.register(gimli::Arm::SP).unwrap(),
+            device_memory.register(gimli::Arm::LR).unwrap(),
+            device_memory.register(gimli::Arm::PC).unwrap()
+        );
+
         // Try to unwind
         match platform_context.unwind(&mut device_memory, frames.last_mut())? {
             UnwindResult::Finished => {

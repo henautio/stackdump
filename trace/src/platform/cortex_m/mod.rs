@@ -28,33 +28,54 @@ impl<'data> CortexMPlatform<'data> {
         device_memory: &mut DeviceMemory<<Self as Platform<'data>>::Word>,
         unwind_info: UnwindTableRow<usize>,
     ) -> Result<bool, TraceError> {
-        let updated = match unwind_info.cfa() {
+        let cfa = match unwind_info.cfa() {
             CfaRule::RegisterAndOffset { register, offset } => {
-                let new_cfa = (device_memory.register(*register)? as i64 + *offset) as u32;
-                let old_cfa = device_memory.register(gimli::Arm::SP)?;
-                let changed = new_cfa != old_cfa;
-                *device_memory.register_mut(gimli::Arm::SP)? = new_cfa;
-                changed
+                (device_memory.register(*register)? as i64 + *offset) as u32
             }
             CfaRule::Expression(_) => todo!("CfaRule::Expression"),
         };
 
+        log::info!("CFA: {:#010X}", cfa);
+        for i in -4..=0 {
+            log::info!(
+                "CFA {}: {:#010X}",
+                i * 4,
+                device_memory
+                    .read_u32(cfa.wrapping_add_signed(i * 4) as u64, RunTimeEndian::Little)
+                    .unwrap()
+                    .unwrap()
+            );
+        }
+
+        let mut sp_updated = false;
+
         for (reg, rule) in unwind_info.registers() {
+            if *reg == gimli::Arm::SP {
+                sp_updated = true;
+            }
+
             match rule {
                 RegisterRule::Undefined => unreachable!(),
                 RegisterRule::Offset(offset) => {
-                    let cfa = device_memory.register(gimli::Arm::SP)?;
                     let addr = (i64::from(cfa) + offset) as u64;
                     let new_value = device_memory
                         .read_u32(addr, RunTimeEndian::Little)?
                         .ok_or(TraceError::MissingMemory(addr))?;
                     *device_memory.register_mut(*reg)? = new_value;
+                    log::info!("Changed {:?} to {:#010X}", reg, new_value);
                 }
                 _ => unimplemented!(),
             }
         }
 
-        Ok(updated)
+        if !sp_updated {
+            if device_memory.register(gimli::Arm::SP)? != cfa {
+                sp_updated = true;
+                *device_memory.register_mut(gimli::Arm::SP)? = cfa;
+            }
+        }
+
+        Ok(sp_updated)
     }
 
     fn is_last_frame(
@@ -227,6 +248,8 @@ impl<'data> Platform<'data> for CortexMPlatform<'data> {
             }
         };
 
+        log::info!("{unwind_info:#?}");
+
         // We can update the stackpointer and other registers to the previous frame by applying the unwind info
         let stack_pointer_changed = match Self::apply_unwind_info(device_memory, unwind_info) {
             Ok(stack_pointer_changed) => stack_pointer_changed,
@@ -264,9 +287,10 @@ impl<'data> Platform<'data> for CortexMPlatform<'data> {
                         line: None,
                         column: None,
                     },
-                    frame_type: FrameType::Corrupted(
-                        "CFA did not change and LR and PC are equal".into(),
-                    ),
+                    frame_type: FrameType::Corrupted(format!(
+                        "CFA did not change and LR and PC are equal: {:#010X}",
+                        device_memory.register(gimli::Arm::PC)?
+                    )),
                     variables: Vec::new(),
                 }),
             });

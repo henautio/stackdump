@@ -1252,12 +1252,12 @@ where
             }))
         }
         (Ok(variable_name), Err(type_error)) => {
-            log::info!(
-                "Could not read the type of variable `{}` of entry {:X?}: {}",
-                variable_name,
-                entry.offset().to_debug_info_offset(&unit.header),
-                type_error
-            );
+            // log::info!(
+            //     "Could not read the type of variable `{}` of entry {:X?}: {}",
+            //     variable_name,
+            //     entry.offset().to_debug_info_offset(&unit.header),
+            //     type_error
+            // );
             Ok(None)
         }
         (Err(name_error), _) => {
