@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.10.4 (09-10-25)
+
+- Made unwinding more robust, especially around `noreturn` functions
+
 ## 0.10.3 (01-08-25)
 
 - Fix panic where a data slice was indexed out of range
