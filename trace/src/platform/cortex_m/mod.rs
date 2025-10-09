@@ -35,18 +35,6 @@ impl<'data> CortexMPlatform<'data> {
             CfaRule::Expression(_) => todo!("CfaRule::Expression"),
         };
 
-        log::info!("CFA: {:#010X}", cfa);
-        for i in -4..=0 {
-            log::info!(
-                "CFA {}: {:#010X}",
-                i * 4,
-                device_memory
-                    .read_u32(cfa.wrapping_add_signed(i * 4) as u64, RunTimeEndian::Little)
-                    .unwrap()
-                    .unwrap()
-            );
-        }
-
         let mut sp_updated = false;
 
         for (reg, rule) in unwind_info.registers() {
@@ -62,17 +50,14 @@ impl<'data> CortexMPlatform<'data> {
                         .read_u32(addr, RunTimeEndian::Little)?
                         .ok_or(TraceError::MissingMemory(addr))?;
                     *device_memory.register_mut(*reg)? = new_value;
-                    log::info!("Changed {:?} to {:#010X}", reg, new_value);
                 }
                 _ => unimplemented!(),
             }
         }
 
-        if !sp_updated {
-            if device_memory.register(gimli::Arm::SP)? != cfa {
-                sp_updated = true;
-                *device_memory.register_mut(gimli::Arm::SP)? = cfa;
-            }
+        if !sp_updated && device_memory.register(gimli::Arm::SP)? != cfa {
+            sp_updated = true;
+            *device_memory.register_mut(gimli::Arm::SP)? = cfa;
         }
 
         Ok(sp_updated)
@@ -248,8 +233,6 @@ impl<'data> Platform<'data> for CortexMPlatform<'data> {
             }
         };
 
-        log::info!("{unwind_info:#?}");
-
         // We can update the stackpointer and other registers to the previous frame by applying the unwind info
         let stack_pointer_changed = match Self::apply_unwind_info(device_memory, unwind_info) {
             Ok(stack_pointer_changed) => stack_pointer_changed,
@@ -329,8 +312,13 @@ impl<'data> Platform<'data> for CortexMPlatform<'data> {
                 Err(e) => return Err(e),
             }
         } else {
-            // No exception, so follow the LR back
-            *device_memory.register_mut(gimli::Arm::PC)? = device_memory.register(gimli::Arm::LR)?
+            // No exception, so follow the LR back, but one instruction back.
+            // Sometimes a function will have a `bl` instruction at the end.
+            // An example is noreturn functions.
+            // LR always points to the next instruction, which means that it doesn't have to be in the same function as from where the branch originated.
+            // https://lkml.kernel.org/lkml/20240305175846.qnyiru7uaa7itqba@treble/
+            *device_memory.register_mut(gimli::Arm::PC)? =
+                device_memory.register(gimli::Arm::LR)? - 2;
         }
 
         // Have we reached the reset vector?
