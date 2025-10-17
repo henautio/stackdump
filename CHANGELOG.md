@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.10.4 (09-10-25)
+## 0.10.5 (09-10-25)
 
 - Made unwinding more robust, especially around `noreturn` functions
 
