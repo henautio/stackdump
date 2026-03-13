@@ -1358,6 +1358,7 @@ pub fn find_static_variables<W: funty::Integral>(
     dwarf: &Dwarf<DefaultReader>,
     device_memory: &DeviceMemory<W>,
     type_cache: &mut HashMap<DebugInfoOffset, Result<TypeValueTree<W>, TraceError>>,
+    symbol_filter: Option<&HashMap<&str, Option<object::SectionKind>>>,
 ) -> Result<Vec<Variable<W>>, TraceError>
 where
     <W as funty::Numeric>::Bytes: bitvec::view::BitView<Store = u8>,
@@ -1370,6 +1371,7 @@ where
         node: gimli::EntriesTreeNode<DefaultReader>,
         variables: &mut Vec<Variable<W>>,
         type_cache: &mut HashMap<DebugInfoOffset, Result<TypeValueTree<W>, TraceError>>,
+        symbol_filter: Option<&HashMap<&str, Option<object::SectionKind>>>,
     ) -> Result<(), TraceError>
     where
         <W as funty::Numeric>::Bytes: bitvec::view::BitView<Store = u8>,
@@ -1392,6 +1394,23 @@ where
             | gimli::constants::DW_TAG_union_type
             | gimli::constants::DW_TAG_volatile_type => return Ok(()),
             gimli::constants::DW_TAG_variable => {
+                // Early filter: check linkage name against symbol table
+                // BEFORE doing expensive type resolution
+                if let Some(filter) = symbol_filter {
+                    let linkage_name = get_entry_linkage_name(dwarf, unit, entry)?;
+                    if let Some(ln) = &linkage_name {
+                        match filter.get(ln.as_str()) {
+                            Some(Some(object::SectionKind::Other)) => return Ok(()),
+                            Some(_) => {} // keep
+                            None => {
+                                // Symbol not in ELF — skip if no real address
+                                // (can't check address without full resolution, so keep it)
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+
                 if let Some(variable) = read_variable_entry(
                     dwarf,
                     unit,
@@ -1424,6 +1443,7 @@ where
                 child,
                 variables,
                 type_cache,
+                symbol_filter,
             )?;
         }
 
@@ -1442,6 +1462,7 @@ where
             unit_header.entries_tree(&abbreviations, None)?.root()?,
             &mut variables,
             type_cache,
+            symbol_filter,
         )?;
     }
 
